@@ -1,0 +1,21 @@
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background with rounded corners for modern look -->
+  <rect width="32" height="32" rx="6" fill="#2D3748"/>
+  
+  <!-- Transform icon - clean and minimal -->
+  <g fill="none" stroke="white" stroke-width="2" stroke-linecap="round">
+    <!-- Left side - unorganized dots -->
+    <circle cx="8" cy="10" r="1.5" fill="white" opacity="0.7"/>
+    <circle cx="8" cy="16" r="1.5" fill="white" opacity="0.7"/>
+    <circle cx="8" cy="22" r="1.5" fill="white" opacity="0.7"/>
+    
+    <!-- Connector lines -->
+    <path d="M11 10L13 10M11 16L13 16M11 22L13 22" opacity="0.5"/>
+    
+    <!-- Center transform circle -->
+    <circle cx="16" cy="16" r="2.5" fill="white" opacity="0.2"/>
+    
+    <!-- Right side - organized lines -->
+    <path d="M19 10L26 10M19 16L26 16M19 22L26 22"/>
+  </g>
+</svg>

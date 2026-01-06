@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Card } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Copy, Printer, FileText, Sparkles, Check, Upload, Loader2 } from "lucide-react"
+import { Copy, Printer, FileText, Sparkles, Check, Upload, Loader2, Coffee } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { z } from "zod"
 
@@ -164,7 +164,7 @@ export default function MakeThisUsablePage() {
           }
           resolve(csvText)
         },
-        error: (error) => {
+        error: (error: Error) => {
           reject(new Error(`CSV parsing error: ${error.message}`))
         },
       })
@@ -319,6 +319,19 @@ export default function MakeThisUsablePage() {
                 <Printer className="h-4 w-4" />
                 <span className="sr-only">Print output</span>
               </Button>
+              <a
+                href="https://buymeacoffee.com/yourusername"
+                target="_blank"
+                rel="noopener noreferrer"
+                className={cn(
+                  "h-9 px-3 flex items-center gap-2 text-xs font-semibold rounded-lg transition-all",
+                  "hover:bg-primary/10 hover:text-primary text-muted-foreground hover:text-primary",
+                  "border border-border/50 hover:border-primary/50"
+                )}
+              >
+                <Coffee className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Buy me a coffee</span>
+              </a>
             </div>
           </div>
         </div>
