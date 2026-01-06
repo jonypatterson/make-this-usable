@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Card } from "@/components/ui/card"
@@ -110,7 +111,9 @@ export default function MakeThisUsablePage() {
 
   const extractTextFromPDF = async (file: File): Promise<string> => {
     const pdfjsLib = await import("pdfjs-dist")
-    pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`
+    
+    // Use the worker from public folder
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs"
     
     const arrayBuffer = await file.arrayBuffer()
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
@@ -187,9 +190,8 @@ export default function MakeThisUsablePage() {
     // Check file size
     const maxSize = MAX_FILE_SIZE
     if (file.size > maxSize) {
-      setError(
-        `File is too large. Maximum size: ${formatFileSize(maxSize)}. Your file: ${formatFileSize(file.size)}.`
-      )
+      const errorMessage = `File is too large. Maximum size: ${formatFileSize(maxSize)}. Your file: ${formatFileSize(file.size)}.`
+      setError(errorMessage)
       event.target.value = ""
       return
     }
@@ -270,14 +272,14 @@ export default function MakeThisUsablePage() {
       <header className="shrink-0 border-b border-border/50 bg-card/80 backdrop-blur-md premium-shadow-sm">
         <div className="mx-auto max-w-7xl px-6 lg:px-8">
           <div className="flex h-16 items-center justify-between">
-            <div className="flex items-center gap-3">
+            <Link href="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-primary-foreground premium-shadow-sm">
                 <TransformLogo />
               </div>
               <div>
                 <h1 className="text-base font-bold tracking-tight text-foreground">Make This Usable</h1>
               </div>
-            </div>
+            </Link>
 
             <div className="hidden sm:block">
               <p className="text-xs font-medium text-muted-foreground tracking-wide">Turn chaos into clarity</p>
@@ -320,7 +322,7 @@ export default function MakeThisUsablePage() {
                 <span className="sr-only">Print output</span>
               </Button>
               <a
-                href="https://buymeacoffee.com/yourusername"
+                href="https://buymeacoffee.com/jonyp"
                 target="_blank"
                 rel="noopener noreferrer"
                 className={cn(
@@ -392,6 +394,11 @@ export default function MakeThisUsablePage() {
                   <p className="mt-1.5 text-xs text-muted-foreground/70 text-center">
                     Max file size: 10MB
                   </p>
+                  {error && error.includes("too large") && (
+                    <p className="mt-2 text-xs text-destructive text-center font-medium">
+                      {error}
+                    </p>
+                  )}
                   {uploadedFileName && (
                     <p className="mt-1.5 text-xs text-muted-foreground text-center">
                       Loaded: {uploadedFileName}
