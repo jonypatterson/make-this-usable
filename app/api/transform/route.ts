@@ -171,7 +171,6 @@ export async function POST(request: NextRequest) {
         : ({
             type: "input_file",
             file_id: uploaded.id,
-            filename: file.name,
           } as const);
 
       const response = await openai.responses.create({
