@@ -53,6 +53,10 @@ function TransformLogo({ className }: { className?: string }) {
 
 const sampleText = `hey team just wanted to recap our meeting today - so basically we decided to launch on march 15 which is pretty tight but doable, budget wise we got the 250k approved which is awesome!!! sarah you're doing frontend mike backend and lisa design/ux stuff. we need to finalize design system by feb 1 and we'll do weekly checkins monday 2pm. action items: schedule design review, setup repo and ci/cd, write tech spec, and confirm vendor stuff by friday!`
 
+// Must stay in sync with server-side MAX_INPUT_CHARS (see `app/api/transform/route.ts`)
+const MAX_TEXT_CHARS = 100_000
+const MAX_CSV_PREVIEW_ROWS = 200
+const MAX_CSV_PREVIEW_COLUMNS = 30
 
 export default function MakeThisUsablePage() {
   const [inputText, setInputText] = useState("")
@@ -67,6 +71,13 @@ export default function MakeThisUsablePage() {
 
   const handleMakeUsable = async () => {
     if (!inputText.trim()) return
+
+    if (inputText.length > MAX_TEXT_CHARS) {
+      setError(
+        `This input is too long (${inputText.length.toLocaleString()} chars). Maximum is ${MAX_TEXT_CHARS.toLocaleString()} chars. Try uploading a smaller file or reducing rows/columns.`
+      )
+      return
+    }
 
     setIsProcessing(true)
     setHasOutput(false)
@@ -84,8 +95,19 @@ export default function MakeThisUsablePage() {
       })
 
       if (!response.ok) {
-        const data = await response.json()
-        throw new Error(data.error || "Failed to transform text")
+        let message = `Request failed (${response.status})`
+        try {
+          const data = await response.json()
+          message = data?.error || message
+        } catch {
+          try {
+            const text = await response.text()
+            if (text) message = text
+          } catch {
+            // ignore
+          }
+        }
+        throw new Error(message)
       }
 
       const data = await response.json()
@@ -151,20 +173,35 @@ export default function MakeThisUsablePage() {
       Papa.parse(text, {
         header: true,
         skipEmptyLines: true,
+        preview: MAX_CSV_PREVIEW_ROWS,
         complete: (results) => {
-          // Convert CSV data to readable text format
-          let csvText = ""
-          if (results.data && results.data.length > 0) {
-            // Add headers
-            const headers = Object.keys(results.data[0] as any)
-            csvText += headers.join(" | ") + "\n"
-            csvText += "-".repeat(headers.join(" | ").length) + "\n"
-            
-            // Add rows
-            results.data.forEach((row: any) => {
-              csvText += headers.map((h) => row[h] || "").join(" | ") + "\n"
-            })
+          // Convert CSV data to readable text format (preview only)
+          let csvText = `CSV preview (first ${MAX_CSV_PREVIEW_ROWS} rows, up to ${MAX_CSV_PREVIEW_COLUMNS} columns)\n\n`
+
+          if (!results.data || results.data.length === 0) {
+            resolve(csvText + "(No rows found)")
+            return
           }
+
+          const firstRow = results.data[0] as any
+          const allHeaders = Object.keys(firstRow)
+          const headers = allHeaders.slice(0, MAX_CSV_PREVIEW_COLUMNS)
+
+          csvText += headers.join(" | ") + "\n"
+          csvText += "-".repeat(headers.join(" | ").length) + "\n"
+
+          results.data.forEach((row: any) => {
+            csvText += headers.map((h) => row?.[h] ?? "").join(" | ") + "\n"
+          })
+
+          if (allHeaders.length > headers.length) {
+            csvText += `\n(Truncated columns: showing ${headers.length}/${allHeaders.length})\n`
+          }
+
+          if (csvText.length > MAX_TEXT_CHARS) {
+            csvText = csvText.slice(0, MAX_TEXT_CHARS - 200) + "\n\n(Truncated to fit input limit)\n"
+          }
+
           resolve(csvText)
         },
         error: (error: Error) => {
