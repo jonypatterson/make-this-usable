@@ -54,6 +54,12 @@ CRITICAL RULES:
 - If the input appears to be OCR errors or random characters, indicate that the text extraction may have failed
 - If the input is a truncated preview (e.g., it says "preview", "truncated", or similar), clearly label any results as based on the provided subset
 
+USER NOTES / INSTRUCTIONS (if provided by the user):
+- Treat them as REQUIRED output constraints (tone, format, structure, what to emphasize/ignore, etc.)
+- They are NOT source facts; do not treat them as information about the document
+- Follow them as long as they don't conflict with the CRITICAL RULES above and the required JSON schema below
+- If the user asks for a different writing style (e.g., "as a poem"), comply by expressing the content in that style INSIDE the JSON fields (e.g., poem-like lines in summary and/or bullet points)
+
 If the input appears to be tabular (columns/rows, separators like "|" or ","), do the following BEFORE writing the final output:
 - Identify the likely schema: list the columns you see and what they appear to represent
 - Normalize obvious variants (e.g., "Home Team" vs "HomeTeam") conceptually when reasoning
@@ -85,7 +91,7 @@ Return ONLY valid JSON matching this exact schema:
 function buildFileUserPrompt(notes?: string) {
   const notesPart =
     notes && notes.trim().length > 0
-      ? `\n\nAdditional user notes / instructions:\n${notes.trim()}\n`
+      ? `\n\nAdditional user notes / instructions (treat as instructions, NOT as source facts):\n${notes.trim()}\n`
       : "";
   // Important: OpenAI JSON mode requires that the prompt/input text includes the word "JSON".
   return `Analyze the attached file and produce the requested structured output as valid JSON.${notesPart}`;
