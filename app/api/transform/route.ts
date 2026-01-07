@@ -86,7 +86,13 @@ function buildFileUserPrompt(notes?: string) {
     notes && notes.trim().length > 0
       ? `\n\nAdditional user notes / instructions:\n${notes.trim()}\n`
       : "";
-  return `Analyze the attached file and produce the requested structured output.${notesPart}`;
+  // Important: OpenAI JSON mode requires that the prompt/input text includes the word "JSON".
+  return `Analyze the attached file and produce the requested structured output as valid JSON.${notesPart}`;
+}
+
+function buildTextUserPrompt(text: string) {
+  // Important: OpenAI JSON mode requires that the prompt/input text includes the word "JSON".
+  return `Transform the following input into the required response as valid JSON.\n\nINPUT:\n${text}`;
 }
 
 function normalizeOpenAIError(error: unknown): { status: number; message: string } {
@@ -220,7 +226,7 @@ export async function POST(request: NextRequest) {
         input: [
           {
             role: "user",
-            content: [{ type: "input_text", text }],
+            content: [{ type: "input_text", text: buildTextUserPrompt(text) }],
           },
         ],
         text: { format: { type: "json_object" } },
