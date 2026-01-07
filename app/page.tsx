@@ -66,6 +66,7 @@ const MAX_NOTES_CHARS = 10_000
 
 export default function MakeThisUsablePage() {
   const [inputText, setInputText] = useState("")
+  const [notes, setNotes] = useState("")
   const [isProcessing, setIsProcessing] = useState(false)
   const [hasOutput, setHasOutput] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -80,15 +81,20 @@ export default function MakeThisUsablePage() {
     if (!selectedFile && !inputText.trim()) return
 
     if (selectedFile) {
-      if (inputText.length > MAX_NOTES_CHARS) {
+      if (notes.length > MAX_NOTES_CHARS) {
         setError(
-          `Your notes are too long (${inputText.length.toLocaleString()} chars). Maximum is ${MAX_NOTES_CHARS.toLocaleString()} chars. Please shorten them.`
+          `Your notes are too long (${notes.length.toLocaleString()} chars). Maximum is ${MAX_NOTES_CHARS.toLocaleString()} chars. Please shorten them.`
         )
         return
       }
     } else if (inputText.length > MAX_TEXT_CHARS) {
       setError(
         `This input is too long (${inputText.length.toLocaleString()} chars). Maximum is ${MAX_TEXT_CHARS.toLocaleString()} chars. Try shortening the text or uploading a file instead.`
+      )
+      return
+    } else if (notes.length > MAX_NOTES_CHARS) {
+      setError(
+        `Your notes are too long (${notes.length.toLocaleString()} chars). Maximum is ${MAX_NOTES_CHARS.toLocaleString()} chars. Please shorten them.`
       )
       return
     }
@@ -106,7 +112,7 @@ export default function MakeThisUsablePage() {
             body: (() => {
               const form = new FormData()
               form.append("file", selectedFile)
-              if (inputText.trim()) form.append("notes", inputText.trim())
+              if (notes.trim()) form.append("notes", notes.trim())
               return form
             })(),
           })
@@ -115,7 +121,7 @@ export default function MakeThisUsablePage() {
             headers: {
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({ text: inputText }),
+            body: JSON.stringify({ text: inputText, notes: notes.trim() || undefined }),
           })
 
       if (!response.ok) {
@@ -151,6 +157,7 @@ export default function MakeThisUsablePage() {
 
   const handleUseSample = () => {
     setInputText(sampleText)
+    setNotes("")
     setHasOutput(false)
     setSelectedFile(null)
     setUploadedFileName(null)
@@ -182,6 +189,7 @@ export default function MakeThisUsablePage() {
     setSelectedFile(file)
     setUploadedFileName(file.name)
     setHasOutput(false)
+    setInputText("")
     // Reset file input so selecting same file again triggers onChange
     event.target.value = ""
   }
@@ -298,7 +306,9 @@ export default function MakeThisUsablePage() {
               <div className="shrink-0 px-5 py-4 border-b border-border/50 bg-muted/30">
                 <div className="flex items-center justify-between">
                   <h2 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Input</h2>
-                  <span className="text-xs font-mono text-muted-foreground/60">{inputText.length} chars</span>
+                  <span className="text-xs font-mono text-muted-foreground/60">
+                    {(selectedFile ? notes.length : inputText.length)} chars
+                  </span>
                 </div>
               </div>
 
@@ -342,6 +352,7 @@ export default function MakeThisUsablePage() {
                         onClick={() => {
                           setSelectedFile(null)
                           setUploadedFileName(null)
+                          setNotes("")
                         }}
                       >
                         Remove
@@ -350,8 +361,8 @@ export default function MakeThisUsablePage() {
                   )}
                 </div>
                 <Textarea
-                  value={inputText}
-                  onChange={(e) => setInputText(e.target.value)}
+                  value={selectedFile ? notes : inputText}
+                  onChange={(e) => (selectedFile ? setNotes(e.target.value) : setInputText(e.target.value))}
                   placeholder={
                     selectedFile
                       ? "Optional notes/instructions for how to analyze this file…"
@@ -359,6 +370,24 @@ export default function MakeThisUsablePage() {
                   }
                   className="flex-1 resize-none border-0 bg-background/50 paper-texture text-sm leading-relaxed focus-visible:ring-2 focus-visible:ring-primary/20 rounded-xl transition-all placeholder:text-muted-foreground/40 p-4"
                 />
+                {!selectedFile && (
+                  <div className="mt-3">
+                    <div className="flex items-center justify-between px-1">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        Optional notes/instructions
+                      </span>
+                      <span className="text-xs font-mono text-muted-foreground/60">
+                        {notes.length} chars
+                      </span>
+                    </div>
+                    <Textarea
+                      value={notes}
+                      onChange={(e) => setNotes(e.target.value)}
+                      placeholder="E.g. audience, tone, what to focus on, what to ignore…"
+                      className="mt-2 min-h-[96px] resize-none bg-background/40 text-sm leading-relaxed focus-visible:ring-2 focus-visible:ring-primary/20 rounded-xl transition-all placeholder:text-muted-foreground/40 p-4"
+                    />
+                  </div>
+                )}
                 <div className="mt-4 flex items-center gap-2">
                   <Button
                     onClick={handleMakeUsable}

@@ -18,6 +18,7 @@ const OPENAI_FILE_MODEL = process.env.OPENAI_FILE_MODEL ?? "gpt-4o-mini";
 
 const transformRequestSchema = z.object({
   text: z.string().min(1).max(MAX_INPUT_CHARS),
+  notes: z.string().max(10_000).optional(),
 });
 
 const transformFileNotesSchema = z.object({
@@ -90,9 +91,13 @@ function buildFileUserPrompt(notes?: string) {
   return `Analyze the attached file and produce the requested structured output as valid JSON.${notesPart}`;
 }
 
-function buildTextUserPrompt(text: string) {
+function buildTextUserPrompt(text: string, notes?: string) {
+  const notesPart =
+    notes && notes.trim().length > 0
+      ? `\n\nAdditional user notes / instructions (treat as instructions, NOT as source facts):\n${notes.trim()}\n`
+      : "";
   // Important: OpenAI JSON mode requires that the prompt/input text includes the word "JSON".
-  return `Transform the following input into the required response as valid JSON.\n\nINPUT:\n${text}`;
+  return `Transform the following input into the required response as valid JSON.${notesPart}\n\nINPUT (source facts):\n${text}`;
 }
 
 function normalizeOpenAIError(error: unknown): { status: number; message: string } {
@@ -198,9 +203,10 @@ export async function POST(request: NextRequest) {
       rawModelText = response.output_text ?? null;
     } else {
       let text: string;
+      let notes: string | undefined;
       try {
         const body = await request.json();
-        ({ text } = transformRequestSchema.parse(body));
+        ({ text, notes } = transformRequestSchema.parse(body));
       } catch (error) {
         if (error instanceof z.ZodError) {
           const tooBig = error.issues.some((issue) => issue.code === "too_big");
@@ -226,7 +232,7 @@ export async function POST(request: NextRequest) {
         input: [
           {
             role: "user",
-            content: [{ type: "input_text", text: buildTextUserPrompt(text) }],
+            content: [{ type: "input_text", text: buildTextUserPrompt(text, notes) }],
           },
         ],
         text: { format: { type: "json_object" } },
