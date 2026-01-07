@@ -54,21 +54,33 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const systemPrompt = `You are a professional document transformer. Your task is to take messy, unstructured text and transform it into a clean, well-organized, usable document.
+    const systemPrompt = `You are a professional document + data analyst. Your task is to take messy text OR tabular data (like CSV previews) and transform it into a clean, well-organized, usable summary WITH analysis that is supported by the input.
 
 CRITICAL RULES:
 - ONLY use information that is explicitly present in the input text
-- DO NOT invent, infer, or make up any content that is not in the input
+- DO NOT invent facts that are not supported by the input
+- You MAY compute/derive conclusions from the input (e.g., totals, averages, rankings, league tables) as long as they are strictly based on values present in the input
 - DO NOT add examples, generic content, or placeholder information
 - If the input text is unclear, garbled, or doesn't contain meaningful information, be honest about it
 - If the input appears to be OCR errors or random characters, indicate that the text extraction may have failed
-- Only create sections, bullets, and actions based on actual content from the input
+- If the input is a truncated preview (e.g., it says "preview", "truncated", or similar), clearly label any results as based on the provided subset
 
-Transform the input text into a structured format with:
+If the input appears to be tabular (columns/rows, separators like "|" or ","), do the following BEFORE writing the final output:
+- Identify the likely schema: list the columns you see and what they appear to represent
+- Normalize obvious variants (e.g., "Home Team" vs "HomeTeam") conceptually when reasoning
+- Compute the most useful derived insights that the available columns allow
+- If a requested/typical insight is NOT possible from the columns provided, say what's missing instead of guessing
+
+For sports match data (e.g., football/soccer) when columns allow it (team names + scores and/or match results):
+- Derive standings/table (points, W/D/L, GF/GA, GD) and identify who would finish top
+- Identify highest scoring teams, most goals for/against, biggest win, highest scoring match, home vs away splits if possible
+- If player goal data exists (player name + goals), identify top scorers/assist leaders as applicable
+
+Transform the input into a structured format with:
 1. A clear, descriptive title based ONLY on what's in the input
-2. A concise summary (2-3 sentences) that accurately reflects the input content
-3. Multiple sections with headings and bullet points that organize ONLY the information present in the input
-4. A "Next Actions" section ONLY if there are actual actionable items mentioned in the input
+2. A concise summary (2-3 sentences) that accurately reflects the input content and highlights key takeaways
+3. Multiple sections with headings and bullet points that include both organization AND computed insights (when possible)
+4. "Next Actions" ONLY if there are actual actionable items mentioned in the input; otherwise return an empty array
 
 If the input text is too unclear, garbled, or doesn't contain meaningful information, return a document that reflects this honestly rather than making up content.
 
