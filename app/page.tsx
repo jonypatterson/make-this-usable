@@ -173,10 +173,9 @@ export default function MakeThisUsablePage() {
       Papa.parse(text, {
         header: true,
         skipEmptyLines: true,
-        preview: MAX_CSV_PREVIEW_ROWS,
         complete: (results) => {
-          // Convert CSV data to readable text format (preview only)
-          let csvText = `CSV preview (first ${MAX_CSV_PREVIEW_ROWS} rows, up to ${MAX_CSV_PREVIEW_COLUMNS} columns)\n\n`
+          // Convert CSV data to readable text format (as many rows as fit)
+          let csvText = `CSV data (up to ${MAX_CSV_PREVIEW_COLUMNS} columns; rows included until input limit)\n\n`
 
           if (!results.data || results.data.length === 0) {
             resolve(csvText + "(No rows found)")
@@ -190,16 +189,20 @@ export default function MakeThisUsablePage() {
           csvText += headers.join(" | ") + "\n"
           csvText += "-".repeat(headers.join(" | ").length) + "\n"
 
-          results.data.forEach((row: any) => {
-            csvText += headers.map((h) => row?.[h] ?? "").join(" | ") + "\n"
-          })
+          let rowsIncluded = 0
+          for (const row of results.data as any[]) {
+            const line = headers.map((h) => row?.[h] ?? "").join(" | ") + "\n"
+            if (csvText.length + line.length > MAX_TEXT_CHARS - 400) break
+            csvText += line
+            rowsIncluded += 1
+          }
 
           if (allHeaders.length > headers.length) {
             csvText += `\n(Truncated columns: showing ${headers.length}/${allHeaders.length})\n`
           }
 
-          if (csvText.length > MAX_TEXT_CHARS) {
-            csvText = csvText.slice(0, MAX_TEXT_CHARS - 200) + "\n\n(Truncated to fit input limit)\n"
+          if (rowsIncluded < (results.data as any[]).length) {
+            csvText += `\n(Truncated rows: showing ${rowsIncluded}/${(results.data as any[]).length} to fit input limit)\n`
           }
 
           resolve(csvText)
@@ -285,11 +288,13 @@ export default function MakeThisUsablePage() {
       })
       outputText += "\n"
     })
-    outputText += "Next Actions\n"
-    output.next_actions.forEach((action) => {
-      outputText += `☐ ${action.action}\n`
-      outputText += `  First step: ${action.first_step}\n`
-    })
+    if (output.next_actions.length > 0) {
+      outputText += "Next Actions\n"
+      output.next_actions.forEach((action) => {
+        outputText += `☐ ${action.action}\n`
+        outputText += `  First step: ${action.first_step}\n`
+      })
+    }
 
     await navigator.clipboard.writeText(outputText)
     setCopied(true)
@@ -603,36 +608,38 @@ export default function MakeThisUsablePage() {
                       </div>
                     ))}
 
-                    <div className="mt-8 rounded-xl border border-primary/20 bg-gradient-to-br from-primary/5 to-accent-color/5 p-6 premium-shadow-sm">
-                      <h3 className="mb-4 text-sm font-bold text-primary flex items-center gap-2">
-                        <Sparkles className="h-4 w-4" />
-                        Next Actions
-                      </h3>
-                      <div className="space-y-3">
-                        {output.next_actions.map((actionItem, idx) => (
-                          <div key={idx} className="flex items-start gap-3 group">
-                            <Checkbox
-                              id={`action-${idx}`}
-                              checked={checkedActions[idx] || false}
-                              onCheckedChange={() => toggleAction(idx)}
-                              className="mt-0.5 border-primary/40 data-[state=checked]:bg-primary data-[state=checked]:border-primary transition-all"
-                            />
-                            <label
-                              htmlFor={`action-${idx}`}
-                              className={cn(
-                                "flex-1 text-sm leading-relaxed cursor-pointer select-none transition-all",
-                                checkedActions[idx] ? "line-through opacity-50" : "group-hover:text-primary",
-                              )}
-                            >
-                              <div className="font-medium">{actionItem.action}</div>
-                              <div className="text-xs text-muted-foreground mt-0.5">
-                                First step: {actionItem.first_step}
-                              </div>
-                            </label>
-                          </div>
-                        ))}
+                    {output.next_actions.length > 0 && (
+                      <div className="mt-8 rounded-xl border border-primary/20 bg-gradient-to-br from-primary/5 to-accent-color/5 p-6 premium-shadow-sm">
+                        <h3 className="mb-4 text-sm font-bold text-primary flex items-center gap-2">
+                          <Sparkles className="h-4 w-4" />
+                          Next Actions
+                        </h3>
+                        <div className="space-y-3">
+                          {output.next_actions.map((actionItem, idx) => (
+                            <div key={idx} className="flex items-start gap-3 group">
+                              <Checkbox
+                                id={`action-${idx}`}
+                                checked={checkedActions[idx] || false}
+                                onCheckedChange={() => toggleAction(idx)}
+                                className="mt-0.5 border-primary/40 data-[state=checked]:bg-primary data-[state=checked]:border-primary transition-all"
+                              />
+                              <label
+                                htmlFor={`action-${idx}`}
+                                className={cn(
+                                  "flex-1 text-sm leading-relaxed cursor-pointer select-none transition-all",
+                                  checkedActions[idx] ? "line-through opacity-50" : "group-hover:text-primary",
+                                )}
+                              >
+                                <div className="font-medium">{actionItem.action}</div>
+                                <div className="text-xs text-muted-foreground mt-0.5">
+                                  First step: {actionItem.first_step}
+                                </div>
+                              </label>
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
                 )}
               </div>
