@@ -6,8 +6,10 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+const MAX_INPUT_CHARS = Number(process.env.MAX_INPUT_CHARS ?? 100_000);
+
 const transformRequestSchema = z.object({
-  text: z.string().min(1).max(10000),
+  text: z.string().min(1).max(MAX_INPUT_CHARS),
 });
 
 const transformResponseSchema = z.object({
@@ -28,10 +30,30 @@ const transformResponseSchema = z.object({
 });
 
 export async function POST(request: NextRequest) {
+  let text: string;
   try {
     const body = await request.json();
-    const { text } = transformRequestSchema.parse(body);
+    ({ text } = transformRequestSchema.parse(body));
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      const tooBig = error.issues.some((issue) => issue.code === "too_big");
+      return NextResponse.json(
+        {
+          error: tooBig
+            ? `Input text is too large. Maximum is ${MAX_INPUT_CHARS.toLocaleString()} characters.`
+            : "Invalid request format",
+        },
+        { status: tooBig ? 413 : 400 }
+      );
+    }
 
+    return NextResponse.json(
+      { error: "Invalid request body" },
+      { status: 400 }
+    );
+  }
+
+  try {
     const systemPrompt = `You are a professional document transformer. Your task is to take messy, unstructured text and transform it into a clean, well-organized, usable document.
 
 CRITICAL RULES:
@@ -73,15 +95,24 @@ Return ONLY valid JSON matching this exact schema:
       throw new Error("No response from OpenAI");
     }
 
-    const parsed = JSON.parse(content);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      return NextResponse.json(
+        { error: "Model returned an invalid response format. Please try again." },
+        { status: 502 }
+      );
+    }
+
     const validated = transformResponseSchema.parse(parsed);
 
     return NextResponse.json(validated);
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json(
-        { error: "Invalid request or response format" },
-        { status: 400 }
+        { error: "Model returned an unexpected response shape. Please try again." },
+        { status: 502 }
       );
     }
     if (error instanceof Error) {
