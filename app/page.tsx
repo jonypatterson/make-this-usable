@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Card } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Copy, Printer, FileText, Sparkles, Check, Upload, Loader2, Coffee } from "lucide-react"
+import { Copy, Printer, FileText, Sparkles, Check, Upload, Coffee } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { z } from "zod"
 
@@ -60,8 +60,6 @@ const sampleText = `hey team just wanted to recap our meeting today - so basical
 
 // Must stay in sync with server-side MAX_INPUT_CHARS (see `app/api/transform/route.ts`)
 const MAX_TEXT_CHARS = 100_000
-const MAX_CSV_PREVIEW_ROWS = 200
-const MAX_CSV_PREVIEW_COLUMNS = 30
 
 export default function MakeThisUsablePage() {
   const [inputText, setInputText] = useState("")
@@ -71,15 +69,15 @@ export default function MakeThisUsablePage() {
   const [checkedActions, setCheckedActions] = useState<Record<number, boolean>>({})
   const [output, setOutput] = useState<TransformResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [isExtracting, setIsExtracting] = useState(false)
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null)
 
   const handleMakeUsable = async () => {
-    if (!inputText.trim()) return
+    if (!selectedFile && !inputText.trim()) return
 
-    if (inputText.length > MAX_TEXT_CHARS) {
+    if (!selectedFile && inputText.length > MAX_TEXT_CHARS) {
       setError(
-        `This input is too long (${inputText.length.toLocaleString()} chars). Maximum is ${MAX_TEXT_CHARS.toLocaleString()} chars. Try uploading a smaller file or reducing rows/columns.`
+        `This input is too long (${inputText.length.toLocaleString()} chars). Maximum is ${MAX_TEXT_CHARS.toLocaleString()} chars. Try shortening the text or uploading a file instead.`
       )
       return
     }
@@ -91,13 +89,23 @@ export default function MakeThisUsablePage() {
     setOutput(null)
 
     try {
-      const response = await fetch("/api/transform", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ text: inputText }),
-      })
+      const response = selectedFile
+        ? await fetch("/api/transform", {
+            method: "POST",
+            body: (() => {
+              const form = new FormData()
+              form.append("file", selectedFile)
+              if (inputText.trim()) form.append("notes", inputText.trim())
+              return form
+            })(),
+          })
+        : await fetch("/api/transform", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ text: inputText }),
+          })
 
       if (!response.ok) {
         let message = `Request failed (${response.status})`
@@ -133,90 +141,8 @@ export default function MakeThisUsablePage() {
   const handleUseSample = () => {
     setInputText(sampleText)
     setHasOutput(false)
+    setSelectedFile(null)
     setUploadedFileName(null)
-  }
-
-  const extractTextFromPDF = async (file: File): Promise<string> => {
-    const pdfjsLib = await import("pdfjs-dist")
-    
-    // Use the worker from public folder
-    pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs"
-    
-    const arrayBuffer = await file.arrayBuffer()
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
-    let fullText = ""
-
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i)
-      const textContent = await page.getTextContent()
-      const pageText = textContent.items
-        .map((item: any) => item.str)
-        .join(" ")
-      fullText += pageText + "\n\n"
-    }
-
-    return fullText
-  }
-
-  const extractTextFromImage = async (file: File): Promise<string> => {
-    const Tesseract = await import("tesseract.js")
-    const { data } = await Tesseract.recognize(file, "eng", {
-      logger: (m) => {
-        if (m.status === "recognizing text") {
-          // Progress updates can be shown here if needed
-        }
-      },
-    })
-    return data.text
-  }
-
-  const extractTextFromCSV = async (file: File): Promise<string> => {
-    const Papa = await import("papaparse")
-    const text = await file.text()
-    
-    return new Promise((resolve, reject) => {
-      Papa.parse(text, {
-        header: true,
-        skipEmptyLines: true,
-        complete: (results) => {
-          // Convert CSV data to readable text format (as many rows as fit)
-          let csvText = `CSV data (up to ${MAX_CSV_PREVIEW_COLUMNS} columns; rows included until input limit)\n\n`
-
-          if (!results.data || results.data.length === 0) {
-            resolve(csvText + "(No rows found)")
-            return
-          }
-
-          const firstRow = results.data[0] as any
-          const allHeaders = Object.keys(firstRow)
-          const headers = allHeaders.slice(0, MAX_CSV_PREVIEW_COLUMNS)
-
-          csvText += headers.join(" | ") + "\n"
-          csvText += "-".repeat(headers.join(" | ").length) + "\n"
-
-          let rowsIncluded = 0
-          for (const row of results.data as any[]) {
-            const line = headers.map((h) => row?.[h] ?? "").join(" | ") + "\n"
-            if (csvText.length + line.length > MAX_TEXT_CHARS - 400) break
-            csvText += line
-            rowsIncluded += 1
-          }
-
-          if (allHeaders.length > headers.length) {
-            csvText += `\n(Truncated columns: showing ${headers.length}/${allHeaders.length})\n`
-          }
-
-          if (rowsIncluded < (results.data as any[]).length) {
-            csvText += `\n(Truncated rows: showing ${rowsIncluded}/${(results.data as any[]).length} to fit input limit)\n`
-          }
-
-          resolve(csvText)
-        },
-        error: (error: Error) => {
-          reject(new Error(`CSV parsing error: ${error.message}`))
-        },
-      })
-    })
   }
 
   // File size limit (in bytes) - same for all file types
@@ -241,45 +167,12 @@ export default function MakeThisUsablePage() {
       return
     }
 
-    setIsExtracting(true)
     setError(null)
+    setSelectedFile(file)
     setUploadedFileName(file.name)
     setHasOutput(false)
-
-    try {
-      let extractedText = ""
-
-      if (file.type === "application/pdf") {
-        extractedText = await extractTextFromPDF(file)
-      } else if (file.type.startsWith("image/")) {
-        extractedText = await extractTextFromImage(file)
-      } else if (
-        file.type === "text/csv" ||
-        file.name.endsWith(".csv")
-      ) {
-        extractedText = await extractTextFromCSV(file)
-      } else {
-        // Try to read as plain text
-        extractedText = await file.text()
-      }
-
-      if (!extractedText.trim()) {
-        throw new Error("No text could be extracted from this file.")
-      }
-
-      setInputText(extractedText)
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Failed to extract text from file. Please try another file."
-      )
-      setUploadedFileName(null)
-    } finally {
-      setIsExtracting(false)
-      // Reset file input
-      event.target.value = ""
-    }
+    // Reset file input so selecting same file again triggers onChange
+    event.target.value = ""
   }
 
   const handleCopy = async () => {
@@ -406,37 +299,22 @@ export default function MakeThisUsablePage() {
                     accept=".pdf,.csv,image/*"
                     onChange={handleFileUpload}
                     className="hidden"
-                    disabled={isExtracting}
                   />
                   <label htmlFor="file-upload" className="cursor-pointer">
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
-                      disabled={isExtracting}
                       className={cn(
                         "w-full h-9 text-xs font-medium transition-all rounded-lg",
-                        isExtracting
-                          ? "opacity-50 cursor-not-allowed"
-                          : "hover:bg-primary/10 hover:text-primary hover:border-primary/50 cursor-pointer"
+                        "hover:bg-primary/10 hover:text-primary hover:border-primary/50 cursor-pointer"
                       )}
                       onClick={() => {
-                        if (!isExtracting) {
-                          document.getElementById("file-upload")?.click()
-                        }
+                        document.getElementById("file-upload")?.click()
                       }}
                     >
-                      {isExtracting ? (
-                        <>
-                          <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                          Extracting text...
-                        </>
-                      ) : (
-                        <>
-                          <Upload className="mr-2 h-3.5 w-3.5" />
-                          Upload PDF, Image, or CSV
-                        </>
-                      )}
+                      <Upload className="mr-2 h-3.5 w-3.5" />
+                      Upload PDF, Image, or CSV
                     </Button>
                   </label>
                   <p className="mt-1.5 text-xs text-muted-foreground/70 text-center">
@@ -448,21 +326,35 @@ export default function MakeThisUsablePage() {
                     </p>
                   )}
                   {uploadedFileName && (
-                    <p className="mt-1.5 text-xs text-muted-foreground text-center">
-                      Loaded: {uploadedFileName}
-                    </p>
+                    <div className="mt-1.5 flex items-center justify-center gap-2 text-xs text-muted-foreground">
+                      <span>Loaded: {uploadedFileName}</span>
+                      <button
+                        type="button"
+                        className="text-primary/70 hover:text-primary transition-colors font-medium"
+                        onClick={() => {
+                          setSelectedFile(null)
+                          setUploadedFileName(null)
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </div>
                   )}
                 </div>
                 <Textarea
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
-                  placeholder="Paste any messy text here or upload a document..."
+                  placeholder={
+                    selectedFile
+                      ? "Optional notes for the AI about this file (what to focus on, questions to answer, etc.)..."
+                      : "Paste any messy text here or upload a document..."
+                  }
                   className="flex-1 resize-none border-0 bg-background/50 paper-texture text-sm leading-relaxed focus-visible:ring-2 focus-visible:ring-primary/20 rounded-xl transition-all placeholder:text-muted-foreground/40 p-4"
                 />
                 <div className="mt-4 flex items-center gap-2">
                   <Button
                     onClick={handleMakeUsable}
-                    disabled={!inputText.trim() || isProcessing}
+                    disabled={(!selectedFile && !inputText.trim()) || isProcessing}
                     className={cn(
                       "flex-1 h-11 font-semibold text-sm transition-all duration-300 rounded-xl premium-shadow-sm",
                       isProcessing

@@ -1,15 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
-import OpenAI from "openai";
+import OpenAI, { toFile } from "openai";
 import { z } from "zod";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+function getOpenAIClient() {
+  // Instantiate lazily so builds don't require OPENAI_API_KEY.
+  return new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+  });
+}
 
 const MAX_INPUT_CHARS = Number(process.env.MAX_INPUT_CHARS ?? 100_000);
+const MAX_FILE_BYTES = Number(process.env.MAX_FILE_BYTES ?? 10 * 1024 * 1024);
 
 const transformRequestSchema = z.object({
   text: z.string().min(1).max(MAX_INPUT_CHARS),
+});
+
+const transformFileNotesSchema = z.object({
+  notes: z.string().max(10_000).optional(),
 });
 
 const transformResponseSchema = z.object({
@@ -29,32 +37,8 @@ const transformResponseSchema = z.object({
   ),
 });
 
-export async function POST(request: NextRequest) {
-  let text: string;
-  try {
-    const body = await request.json();
-    ({ text } = transformRequestSchema.parse(body));
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      const tooBig = error.issues.some((issue) => issue.code === "too_big");
-      return NextResponse.json(
-        {
-          error: tooBig
-            ? `Input text is too large. Maximum is ${MAX_INPUT_CHARS.toLocaleString()} characters.`
-            : "Invalid request format",
-        },
-        { status: tooBig ? 413 : 400 }
-      );
-    }
-
-    return NextResponse.json(
-      { error: "Invalid request body" },
-      { status: 400 }
-    );
-  }
-
-  try {
-    const systemPrompt = `You are a professional document + data analyst. Your task is to take messy text OR tabular data (like CSV previews) and transform it into a clean, well-organized, usable summary WITH analysis that is supported by the input.
+function getSystemPrompt() {
+  return `You are a professional document + data analyst. Your task is to take messy text OR tabular data (like CSV previews) and transform it into a clean, well-organized, usable summary WITH analysis that is supported by the input.
 
 CRITICAL RULES:
 - ONLY use information that is explicitly present in the input text
@@ -91,25 +75,140 @@ Return ONLY valid JSON matching this exact schema:
   "sections": [{"heading": string, "bullets": string[]}],
   "next_actions": [{"action": string, "first_step": string}]
 }`;
+}
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: text },
-      ],
-      response_format: { type: "json_object" },
-      temperature: 0.1,
-    });
+function buildFileUserPrompt(notes?: string) {
+  const notesPart =
+    notes && notes.trim().length > 0
+      ? `\n\nAdditional user notes / instructions:\n${notes.trim()}\n`
+      : "";
+  return `Analyze the attached file and produce the requested structured output.${notesPart}`;
+}
 
-    const content = completion.choices[0]?.message?.content;
-    if (!content) {
+export async function POST(request: NextRequest) {
+  try {
+    if (!process.env.OPENAI_API_KEY) {
+      return NextResponse.json(
+        { error: "Server is missing OPENAI_API_KEY configuration." },
+        { status: 500 }
+      );
+    }
+
+    const openai = getOpenAIClient();
+    const contentType = request.headers.get("content-type") ?? "";
+    const systemPrompt = getSystemPrompt();
+
+    let rawModelText: string | null = null;
+
+    if (contentType.includes("multipart/form-data")) {
+      const form = await request.formData();
+      const file = form.get("file");
+      const notesValue = form.get("notes");
+      const notes =
+        typeof notesValue === "string"
+          ? transformFileNotesSchema.parse({ notes: notesValue }).notes
+          : undefined;
+
+      if (!(file instanceof File)) {
+        return NextResponse.json(
+          { error: "Missing file upload (expected form field 'file')." },
+          { status: 400 }
+        );
+      }
+
+      if (file.size > MAX_FILE_BYTES) {
+        return NextResponse.json(
+          {
+            error: `File is too large. Maximum is ${MAX_FILE_BYTES.toLocaleString()} bytes.`,
+          },
+          { status: 413 }
+        );
+      }
+
+      const uploaded = await openai.files.create({
+        file: await toFile(Buffer.from(await file.arrayBuffer()), file.name, {
+          type: file.type || undefined,
+        }),
+        purpose: "user_data",
+      });
+
+      const isImage = (file.type || "").startsWith("image/");
+      const fileContent = isImage
+        ? ({
+            type: "input_image",
+            detail: "auto",
+            file_id: uploaded.id,
+          } as const)
+        : ({
+            type: "input_file",
+            file_id: uploaded.id,
+            filename: file.name,
+          } as const);
+
+      const response = await openai.responses.create({
+        model: "gpt-4o",
+        instructions: systemPrompt,
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: buildFileUserPrompt(notes) },
+              fileContent,
+            ],
+          },
+        ],
+        text: { format: { type: "json_object" } },
+        temperature: 0.1,
+      });
+
+      rawModelText = response.output_text ?? null;
+    } else {
+      let text: string;
+      try {
+        const body = await request.json();
+        ({ text } = transformRequestSchema.parse(body));
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          const tooBig = error.issues.some((issue) => issue.code === "too_big");
+          return NextResponse.json(
+            {
+              error: tooBig
+                ? `Input text is too large. Maximum is ${MAX_INPUT_CHARS.toLocaleString()} characters.`
+                : "Invalid request format",
+            },
+            { status: tooBig ? 413 : 400 }
+          );
+        }
+
+        return NextResponse.json(
+          { error: "Invalid request body" },
+          { status: 400 }
+        );
+      }
+
+      const response = await openai.responses.create({
+        model: "gpt-4o",
+        instructions: systemPrompt,
+        input: [
+          {
+            role: "user",
+            content: [{ type: "input_text", text }],
+          },
+        ],
+        text: { format: { type: "json_object" } },
+        temperature: 0.1,
+      });
+
+      rawModelText = response.output_text ?? null;
+    }
+
+    if (!rawModelText) {
       throw new Error("No response from OpenAI");
     }
 
     let parsed: unknown;
     try {
-      parsed = JSON.parse(content);
+      parsed = JSON.parse(rawModelText);
     } catch {
       return NextResponse.json(
         { error: "Model returned an invalid response format. Please try again." },
@@ -138,7 +237,7 @@ Return ONLY valid JSON matching this exact schema:
     }
     if (error instanceof Error) {
       return NextResponse.json(
-        { error: "Failed to transform text. Please try again." },
+        { error: "Failed to analyze input. Please try again." },
         { status: 500 }
       );
     }
