@@ -12,6 +12,10 @@ function getOpenAIClient() {
 const MAX_INPUT_CHARS = Number(process.env.MAX_INPUT_CHARS ?? 100_000);
 const MAX_FILE_BYTES = Number(process.env.MAX_FILE_BYTES ?? 10 * 1024 * 1024);
 
+const OPENAI_TEXT_MODEL = process.env.OPENAI_TEXT_MODEL ?? "gpt-4o";
+// `input_file` support varies by model; default to a smaller, more compatible model.
+const OPENAI_FILE_MODEL = process.env.OPENAI_FILE_MODEL ?? "gpt-4o-mini";
+
 const transformRequestSchema = z.object({
   text: z.string().min(1).max(MAX_INPUT_CHARS),
 });
@@ -85,6 +89,30 @@ function buildFileUserPrompt(notes?: string) {
   return `Analyze the attached file and produce the requested structured output.${notesPart}`;
 }
 
+function normalizeOpenAIError(error: unknown): { status: number; message: string } {
+  const fallback = { status: 500, message: "Failed to analyze input. Please try again." };
+  if (!error || typeof error !== "object") return fallback;
+
+  const err = error as {
+    status?: unknown;
+    message?: unknown;
+    error?: { message?: unknown; type?: unknown; code?: unknown } | unknown;
+  };
+
+  const status = typeof err.status === "number" ? err.status : 500;
+  const nestedMessage =
+    err.error && typeof err.error === "object" && err.error !== null
+      ? (err.error as { message?: unknown }).message
+      : undefined;
+
+  const message =
+    (typeof nestedMessage === "string" && nestedMessage.trim()) ||
+    (typeof err.message === "string" && err.message.trim()) ||
+    fallback.message;
+
+  return { status, message };
+}
+
 export async function POST(request: NextRequest) {
   try {
     if (!process.env.OPENAI_API_KEY) {
@@ -129,7 +157,8 @@ export async function POST(request: NextRequest) {
         file: await toFile(Buffer.from(await file.arrayBuffer()), file.name, {
           type: file.type || undefined,
         }),
-        purpose: "user_data",
+        // Most broadly compatible purpose for using files with models/tools.
+        purpose: "assistants",
       });
 
       const isImage = (file.type || "").startsWith("image/");
@@ -146,7 +175,7 @@ export async function POST(request: NextRequest) {
           } as const);
 
       const response = await openai.responses.create({
-        model: "gpt-4o",
+        model: OPENAI_FILE_MODEL,
         instructions: systemPrompt,
         input: [
           {
@@ -187,7 +216,7 @@ export async function POST(request: NextRequest) {
       }
 
       const response = await openai.responses.create({
-        model: "gpt-4o",
+        model: OPENAI_TEXT_MODEL,
         instructions: systemPrompt,
         input: [
           {
@@ -235,15 +264,7 @@ export async function POST(request: NextRequest) {
         { status: 502 }
       );
     }
-    if (error instanceof Error) {
-      return NextResponse.json(
-        { error: "Failed to analyze input. Please try again." },
-        { status: 500 }
-      );
-    }
-    return NextResponse.json(
-      { error: "An unexpected error occurred" },
-      { status: 500 }
-    );
+    const normalized = normalizeOpenAIError(error);
+    return NextResponse.json({ error: normalized.message }, { status: normalized.status });
   }
 }
