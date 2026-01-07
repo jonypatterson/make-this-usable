@@ -42,6 +42,11 @@ const transformResponseSchema = z.object({
   ),
 });
 
+function shouldEnforcePoeticStyle(notes?: string) {
+  if (!notes) return false;
+  return /\b(poem|poetry|poetic|haiku|sonnet|limerick|rhyme|rhyming)\b/i.test(notes);
+}
+
 function getSystemPrompt() {
   return `You are a professional document + data analyst. Your task is to take messy text OR tabular data (like CSV previews) and transform it into a clean, well-organized, usable summary WITH analysis that is supported by the input.
 
@@ -73,7 +78,7 @@ For sports match data (e.g., football/soccer) when columns allow it (team names 
 
 Transform the input into a structured format with:
 1. A clear, descriptive title based ONLY on what's in the input
-2. A concise summary (2-3 sentences) that accurately reflects the input content and highlights key takeaways
+2. A concise summary (typically 2-3 sentences, unless the user's instructions require a different style/structure) that accurately reflects the input content and highlights key takeaways
 3. Multiple sections with headings and bullet points that include both organization AND computed insights (when possible)
 4. "Next Actions" ONLY if there are actual actionable items mentioned in the input; otherwise return an empty array
 
@@ -104,6 +109,29 @@ function buildTextUserPrompt(text: string, notes?: string) {
       : "";
   // Important: OpenAI JSON mode requires that the prompt/input text includes the word "JSON".
   return `Transform the following input into the required response as valid JSON.${notesPart}\n\nINPUT (source facts):\n${text}`;
+}
+
+function buildPoetryRewritePrompt(originalJson: string, notes?: string) {
+  const notesPart =
+    notes && notes.trim().length > 0
+      ? `\n\nUser notes / instructions (REQUIRED constraints):\n${notes.trim()}\n`
+      : "";
+
+  // Important: OpenAI JSON mode requires that the prompt includes the word "JSON".
+  return `Rewrite the following JSON output to comply with the user's style request (e.g., "in poetry") while preserving facts.
+
+CRITICAL:
+- Do NOT add facts that are not already present in the JSON below
+- Do NOT remove facts that are already present; you may rephrase them
+- Keep EXACTLY the same JSON schema/keys as before (title, summary, sections[{heading,bullets}], next_actions[{action,first_step}])
+- It is OK to use line breaks (\\n) inside strings to make poetic lines
+- If the user's instructions conflict with the schema, comply by expressing the style INSIDE the strings while keeping the schema
+
+Return ONLY valid JSON.
+${notesPart}
+
+JSON to rewrite (source facts):
+${originalJson}`;
 }
 
 function normalizeOpenAIError(error: unknown): { status: number; message: string } {
@@ -144,6 +172,7 @@ export async function POST(request: NextRequest) {
     const systemPrompt = getSystemPrompt();
 
     let rawModelText: string | null = null;
+    let notesForRequest: string | undefined;
 
     if (contentType.includes("multipart/form-data")) {
       const form = await request.formData();
@@ -153,6 +182,7 @@ export async function POST(request: NextRequest) {
         typeof notesValue === "string"
           ? transformFileNotesSchema.parse({ notes: notesValue }).notes
           : undefined;
+      notesForRequest = notes;
 
       if (!(file instanceof File)) {
         return NextResponse.json(
@@ -231,6 +261,7 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
+      notesForRequest = notes;
 
       const response = await openai.responses.create({
         model: OPENAI_TEXT_MODEL,
@@ -262,7 +293,40 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const validated = transformResponseSchema.parse(parsed);
+    let validated = transformResponseSchema.parse(parsed);
+
+    // If the user explicitly asked for poetry/poetic output, do a second "rewrite" pass
+    // over the structured JSON to enforce style while preserving facts.
+    if (shouldEnforcePoeticStyle(notesForRequest)) {
+      const rewrite = await openai.responses.create({
+        model: OPENAI_TEXT_MODEL,
+        instructions:
+          "You are a careful editor. You rewrite content for style ONLY, preserving facts and schema.",
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: buildPoetryRewritePrompt(JSON.stringify(validated), notesForRequest),
+              },
+            ],
+          },
+        ],
+        text: { format: { type: "json_object" } },
+        temperature: 0.7,
+      });
+
+      const rewrittenText = rewrite.output_text ?? null;
+      if (rewrittenText) {
+        try {
+          const rewrittenParsed = JSON.parse(rewrittenText);
+          validated = transformResponseSchema.parse(rewrittenParsed);
+        } catch {
+          // If rewrite fails, fall back to the original validated output.
+        }
+      }
+    }
 
     // The model occasionally returns placeholder/blank "next_actions" items.
     // Filter those out so the UI can reliably hide the section when empty.
