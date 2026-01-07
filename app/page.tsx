@@ -9,7 +9,6 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Copy, Printer, FileText, Sparkles, Check, Upload, Coffee } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { z } from "zod"
-import Papa from "papaparse"
 
 const transformResponseSchema = z.object({
   title: z.string(),
@@ -62,56 +61,12 @@ const sampleText = `hey team just wanted to recap our meeting today - so basical
 // Must stay in sync with server-side MAX_INPUT_CHARS (see `app/api/transform/route.ts`)
 const MAX_TEXT_CHARS = 100_000
 
-async function extractTextFromPdf(file: File): Promise<string> {
-  const pdfjs = await import("pdfjs-dist")
-  // Use the worker shipped in `/public` (matches our pdfjs-dist version).
-  ;(pdfjs as unknown as { GlobalWorkerOptions: { workerSrc: string } }).GlobalWorkerOptions.workerSrc =
-    "/pdf.worker.min.mjs"
-
-  const data = new Uint8Array(await file.arrayBuffer())
-  const loadingTask = (pdfjs as unknown as { getDocument: (init: unknown) => any }).getDocument({
-    data,
-  })
-  const pdf = await loadingTask.promise
-
-  const pages: string[] = []
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i)
-    const content = await page.getTextContent()
-    const pageText = (content.items as Array<{ str?: string }>)
-      .map((it) => it.str ?? "")
-      .join(" ")
-      .replace(/\s+/g, " ")
-      .trim()
-    if (pageText) pages.push(pageText)
-  }
-
-  return pages.join("\n\n").trim()
-}
-
-async function extractTextFromCsv(file: File): Promise<string> {
-  const raw = await file.text()
-  const parsed = Papa.parse<string[]>(raw, { skipEmptyLines: true })
-  const rows = (parsed.data ?? []).slice(0, 50)
-  const rendered = rows.map((row) => (row ?? []).map((cell) => String(cell ?? "")).join(" | ")).join("\n")
-  return `CSV preview (first ${rows.length} row${rows.length === 1 ? "" : "s"})\n\n${rendered}`.trim()
-}
-
-async function extractTextFromImage(file: File): Promise<string> {
-  const { createWorker } = await import("tesseract.js")
-  const worker = await createWorker("eng", 1, {
-    workerPath: "https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/worker.min.js",
-    corePath: "https://cdn.jsdelivr.net/npm/tesseract.js-core@7.0.0",
-  })
-  const ret = await worker.recognize(file)
-  await worker.terminate()
-  return (ret?.data?.text ?? "").trim()
-}
+// Server-side endpoint accepts optional notes with a max length.
+const MAX_NOTES_CHARS = 10_000
 
 export default function MakeThisUsablePage() {
   const [inputText, setInputText] = useState("")
   const [isProcessing, setIsProcessing] = useState(false)
-  const [isExtracting, setIsExtracting] = useState(false)
   const [hasOutput, setHasOutput] = useState(false)
   const [copied, setCopied] = useState(false)
   const [checkedActions, setCheckedActions] = useState<Record<number, boolean>>({})
@@ -124,7 +79,14 @@ export default function MakeThisUsablePage() {
   const handleMakeUsable = async () => {
     if (!selectedFile && !inputText.trim()) return
 
-    if (!selectedFile && inputText.length > MAX_TEXT_CHARS) {
+    if (selectedFile) {
+      if (inputText.length > MAX_NOTES_CHARS) {
+        setError(
+          `Your notes are too long (${inputText.length.toLocaleString()} chars). Maximum is ${MAX_NOTES_CHARS.toLocaleString()} chars. Please shorten them.`
+        )
+        return
+      }
+    } else if (inputText.length > MAX_TEXT_CHARS) {
       setError(
         `This input is too long (${inputText.length.toLocaleString()} chars). Maximum is ${MAX_TEXT_CHARS.toLocaleString()} chars. Try shortening the text or uploading a file instead.`
       )
@@ -138,23 +100,23 @@ export default function MakeThisUsablePage() {
     setOutput(null)
 
     try {
-      const response =
-        inputText.trim().length > 0
-          ? await fetch("/api/transform", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({ text: inputText }),
-            })
-          : await fetch("/api/transform", {
-              method: "POST",
-              body: (() => {
-                const form = new FormData()
-                if (selectedFile) form.append("file", selectedFile)
-                return form
-              })(),
-            })
+      const response = selectedFile
+        ? await fetch("/api/transform", {
+            method: "POST",
+            body: (() => {
+              const form = new FormData()
+              form.append("file", selectedFile)
+              if (inputText.trim()) form.append("notes", inputText.trim())
+              return form
+            })(),
+          })
+        : await fetch("/api/transform", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ text: inputText }),
+          })
 
       if (!response.ok) {
         let message = `Request failed (${response.status})`
@@ -220,53 +182,8 @@ export default function MakeThisUsablePage() {
     setSelectedFile(file)
     setUploadedFileName(file.name)
     setHasOutput(false)
-    setIsExtracting(true)
     // Reset file input so selecting same file again triggers onChange
     event.target.value = ""
-
-    try {
-      const name = file.name.toLowerCase()
-      let extracted = ""
-
-      if (file.type === "application/pdf" || name.endsWith(".pdf")) {
-        extracted = await extractTextFromPdf(file)
-      } else if (file.type === "text/csv" || name.endsWith(".csv")) {
-        extracted = await extractTextFromCsv(file)
-      } else if ((file.type || "").startsWith("image/")) {
-        extracted = await extractTextFromImage(file)
-      } else {
-        // Best-effort fallback for other text-like files.
-        extracted = await file.text()
-      }
-
-      if (!extracted.trim()) {
-        setError(
-          "Couldn’t extract any readable text from that file. If it’s a scanned PDF/image, try a clearer scan or upload the image directly for OCR."
-        )
-        return
-      }
-
-      if (extracted.length > MAX_TEXT_CHARS) {
-        setError(
-          `Extracted text is very long (${extracted.length.toLocaleString()} chars). Showing the first ${MAX_TEXT_CHARS.toLocaleString()} chars.`
-        )
-        extracted = extracted.slice(0, MAX_TEXT_CHARS)
-      }
-
-      setInputText((prev) => {
-        const prevTrimmed = prev.trim()
-        if (!prevTrimmed) return extracted
-        return `${prevTrimmed}\n\n---\n\n${extracted}`
-      })
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? `Failed to extract text from file: ${err.message}`
-          : "Failed to extract text from file."
-      )
-    } finally {
-      setIsExtracting(false)
-    }
   }
 
   const handleCopy = async () => {
@@ -411,11 +328,6 @@ export default function MakeThisUsablePage() {
                   <p className="mt-1.5 text-xs text-muted-foreground/70 text-center">
                     Max file size: 10MB
                   </p>
-                  {isExtracting && (
-                    <p className="mt-2 text-xs text-muted-foreground text-center font-medium">
-                      Extracting text from file…
-                    </p>
-                  )}
                   {error && error.includes("too large") && (
                     <p className="mt-2 text-xs text-destructive text-center font-medium">
                       {error}
@@ -430,7 +342,6 @@ export default function MakeThisUsablePage() {
                         onClick={() => {
                           setSelectedFile(null)
                           setUploadedFileName(null)
-                          setIsExtracting(false)
                         }}
                       >
                         Remove
@@ -442,10 +353,8 @@ export default function MakeThisUsablePage() {
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
                   placeholder={
-                    isExtracting
-                      ? "Extracting text from your file…"
-                      : selectedFile
-                      ? "Extracted text from your file will appear here (you can edit it before processing)…"
+                    selectedFile
+                      ? "Optional notes/instructions for how to analyze this file…"
                       : "Paste any messy text here or upload a document..."
                   }
                   className="flex-1 resize-none border-0 bg-background/50 paper-texture text-sm leading-relaxed focus-visible:ring-2 focus-visible:ring-primary/20 rounded-xl transition-all placeholder:text-muted-foreground/40 p-4"
