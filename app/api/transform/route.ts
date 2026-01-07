@@ -119,7 +119,16 @@ Return ONLY valid JSON matching this exact schema:
 
     const validated = transformResponseSchema.parse(parsed);
 
-    return NextResponse.json(validated);
+    // The model occasionally returns placeholder/blank "next_actions" items.
+    // Filter those out so the UI can reliably hide the section when empty.
+    const sanitized = {
+      ...validated,
+      next_actions: validated.next_actions.filter(
+        (a) => a.action.trim().length > 0 && a.first_step.trim().length > 0
+      ),
+    };
+
+    return NextResponse.json(sanitized);
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json(

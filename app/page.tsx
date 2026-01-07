@@ -29,6 +29,11 @@ const transformResponseSchema = z.object({
 
 type TransformResponse = z.infer<typeof transformResponseSchema>
 
+const getMeaningfulNextActions = (output: TransformResponse) =>
+  output.next_actions.filter(
+    (a) => a.action.trim().length > 0 && a.first_step.trim().length > 0
+  )
+
 function TransformLogo({ className }: { className?: string }) {
   return (
     <svg
@@ -280,6 +285,7 @@ export default function MakeThisUsablePage() {
   const handleCopy = async () => {
     if (!output) return
 
+    const nextActions = getMeaningfulNextActions(output)
     let outputText = `${output.title}\n\n${output.summary}\n\n`
     output.sections.forEach((section) => {
       outputText += `${section.heading}\n`
@@ -288,9 +294,9 @@ export default function MakeThisUsablePage() {
       })
       outputText += "\n"
     })
-    if (output.next_actions.length > 0) {
+    if (nextActions.length > 0) {
       outputText += "Next Actions\n"
-      output.next_actions.forEach((action) => {
+      nextActions.forEach((action) => {
         outputText += `☐ ${action.action}\n`
         outputText += `  First step: ${action.first_step}\n`
       })
@@ -581,6 +587,10 @@ export default function MakeThisUsablePage() {
 
                 {!isProcessing && hasOutput && output && (
                   <div className="prose prose-sm max-w-none">
+                    {(() => {
+                      const nextActions = getMeaningfulNextActions(output)
+                      return (
+                        <>
                     <h1 className="mb-3 text-2xl font-bold leading-tight text-foreground text-balance">
                       {output.title}
                     </h1>
@@ -608,14 +618,14 @@ export default function MakeThisUsablePage() {
                       </div>
                     ))}
 
-                    {output.next_actions.length > 0 && (
+                    {nextActions.length > 0 && (
                       <div className="mt-8 rounded-xl border border-primary/20 bg-gradient-to-br from-primary/5 to-accent-color/5 p-6 premium-shadow-sm">
                         <h3 className="mb-4 text-sm font-bold text-primary flex items-center gap-2">
                           <Sparkles className="h-4 w-4" />
                           Next Actions
                         </h3>
                         <div className="space-y-3">
-                          {output.next_actions.map((actionItem, idx) => (
+                          {nextActions.map((actionItem, idx) => (
                             <div key={idx} className="flex items-start gap-3 group">
                               <Checkbox
                                 id={`action-${idx}`}
@@ -640,6 +650,9 @@ export default function MakeThisUsablePage() {
                         </div>
                       </div>
                     )}
+                        </>
+                      )
+                    })()}
                   </div>
                 )}
               </div>
