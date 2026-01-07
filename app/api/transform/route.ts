@@ -42,9 +42,8 @@ const transformResponseSchema = z.object({
   ),
 });
 
-function shouldEnforcePoeticStyle(notes?: string) {
-  if (!notes) return false;
-  return /\b(poem|poetry|poetic|haiku|sonnet|limerick|rhyme|rhyming)\b/i.test(notes);
+function shouldApplyNotesRewritePass(notes?: string) {
+  return Boolean(notes && notes.trim().length > 0);
 }
 
 function getSystemPrompt() {
@@ -111,21 +110,22 @@ function buildTextUserPrompt(text: string, notes?: string) {
   return `Transform the following input into the required response as valid JSON.${notesPart}\n\nINPUT (source facts):\n${text}`;
 }
 
-function buildPoetryRewritePrompt(originalJson: string, notes?: string) {
+function buildNotesRewritePrompt(originalJson: string, notes?: string) {
   const notesPart =
     notes && notes.trim().length > 0
       ? `\n\nUser notes / instructions (REQUIRED constraints):\n${notes.trim()}\n`
       : "";
 
   // Important: OpenAI JSON mode requires that the prompt includes the word "JSON".
-  return `Rewrite the following JSON output to comply with the user's style request (e.g., "in poetry") while preserving facts.
+  return `Rewrite the following JSON output so it complies with the user's notes/instructions while preserving facts.
 
 CRITICAL:
 - Do NOT add facts that are not already present in the JSON below
 - Do NOT remove facts that are already present; you may rephrase them
 - Keep EXACTLY the same JSON schema/keys as before (title, summary, sections[{heading,bullets}], next_actions[{action,first_step}])
-- It is OK to use line breaks (\\n) inside strings to make poetic lines
-- If the user's instructions conflict with the schema, comply by expressing the style INSIDE the strings while keeping the schema
+- You MAY change tone, ordering, emphasis, verbosity, and phrasing to match the notes
+- It is OK to use line breaks (\\n) inside strings if the notes request it (e.g., poetry)
+- If the user's instructions conflict with the schema, comply by expressing the intent INSIDE the strings while keeping the schema
 
 Return ONLY valid JSON.
 ${notesPart}
@@ -295,9 +295,9 @@ export async function POST(request: NextRequest) {
 
     let validated = transformResponseSchema.parse(parsed);
 
-    // If the user explicitly asked for poetry/poetic output, do a second "rewrite" pass
-    // over the structured JSON to enforce style while preserving facts.
-    if (shouldEnforcePoeticStyle(notesForRequest)) {
+    // If the user provided notes/instructions, do a second "rewrite" pass over the structured
+    // JSON to enforce those constraints while preserving facts and schema.
+    if (shouldApplyNotesRewritePass(notesForRequest)) {
       const rewrite = await openai.responses.create({
         model: OPENAI_TEXT_MODEL,
         instructions:
@@ -308,13 +308,13 @@ export async function POST(request: NextRequest) {
             content: [
               {
                 type: "input_text",
-                text: buildPoetryRewritePrompt(JSON.stringify(validated), notesForRequest),
+                text: buildNotesRewritePrompt(JSON.stringify(validated), notesForRequest),
               },
             ],
           },
         ],
         text: { format: { type: "json_object" } },
-        temperature: 0.7,
+        temperature: 0.4,
       });
 
       const rewrittenText = rewrite.output_text ?? null;
@@ -337,7 +337,11 @@ export async function POST(request: NextRequest) {
       ),
     };
 
-    return NextResponse.json(sanitized);
+    return NextResponse.json(sanitized, {
+      headers: {
+        "x-received-notes-length": String((notesForRequest ?? "").length),
+      },
+    });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json(
